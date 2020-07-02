@@ -35,6 +35,7 @@ ON  c.TABLE_CATALOG = pk.TABLE_CATALOG Collate Database_Default
             AND c.TABLE_NAME = pk.TABLE_NAME Collate Database_Default
             AND c.COLUMN_NAME = pk.COLUMN_NAME Collate Database_Default
 where c.table_schema = @schema and c.table_Name = @table
+and data_Type != 'timestamp'
 ";
 
         public static string GenerateInsert(DataTable colunasOrigem, DataTable colunasDestino, DataRow item)
@@ -64,7 +65,8 @@ where c.table_schema = @schema and c.table_Name = @table
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine(ex.Message);
+                    Program.Mensagem = ex.Message;
+                    Console.WriteLine(Program.Mensagem);
                 }
               
             }
