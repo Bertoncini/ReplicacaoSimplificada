@@ -9,6 +9,7 @@ namespace ReplicacaoSimplificada
     public static class Program
     {
         public static bool SeAtualizado = false;
+        public static string Mensagem;
 
         public static void Main(string[] args)
         {
@@ -46,19 +47,21 @@ namespace ReplicacaoSimplificada
 
                 if (colunasOrigem.CheckColumnNameType(colunasDestino))
                 {
-                    Console.WriteLine($"Existe colunas na tabela de destino que não existe na de origem\n{string.Join(", ", Util.ColumnsNotFind)}");
+                    Mensagem = $"Existe colunas na tabela de destino que não existe na de origem\n{string.Join(", ", Util.ColumnsNotFind)}";
+                    Console.WriteLine(Mensagem);
                     return;
                 }
 
                 if (colunasDestino.CheckColumnNameType(colunasOrigem))
                 {
-                    Console.WriteLine($"Existe colunas na tabela de origem que não existe na de destino\n{string.Join(",", Util.ColumnsNotFind)}");
+                    Mensagem = $"Existe colunas na tabela de origem que não existe na de destino\n{string.Join(",", Util.ColumnsNotFind)}";
+                    Console.WriteLine(Mensagem);
                     return;
                 }
 
                 var columnPKOrigem = colunasOrigem.Select("SE_PK = 1").First()["COLUMN_NAME"].ToString();
                 var columnPKDestino = colunasDestino.Select("SE_PK = 1").First()["COLUMN_NAME"].ToString();
-                var columnPKIdentity = Convert.ToBoolean(colunasDestino.Select("SE_PK = 1").First()["IsIdentity"].ToString());
+                var columnPKIdentity = Convert.ToBoolean(colunasDestino.Select("SE_PK = 1").First()["IsIdentity"]);
 
                 using (var con = new Conexao(argumentsDic["sourceserver"], argumentsDic["sourcedatabase"], argumentsDic["sourceuser"], argumentsDic["sourcepassword"]))
                     DadosOrigemKey = con.RetornaKeyCheckSum(argumentsDic["sourceschema"], columnPKOrigem, argumentsDic["sourcetable"], colunasOrigem, new List<string>(), argumentsDic["sourcewhere"]);
@@ -114,7 +117,8 @@ namespace ReplicacaoSimplificada
                 }
                 else
                 {
-                    Console.WriteLine("Não existe dados diveregente");
+                    Mensagem = "Não existe dados diveregente";
+                    Console.WriteLine(Mensagem);
                     SeAtualizado = true;
                 }
 
@@ -122,7 +126,8 @@ namespace ReplicacaoSimplificada
             }
             catch (Exception ex)
             {
-                Console.WriteLine(ex.Message);
+                Mensagem = ex.Message;
+                Console.WriteLine(Mensagem);
             }
         }
 
