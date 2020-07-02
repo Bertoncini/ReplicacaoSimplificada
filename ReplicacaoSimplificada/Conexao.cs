@@ -8,9 +8,9 @@ namespace ReplicacaoSimplificada
 {
     class Conexao : IDisposable
     {
-        private static string _connectionString;
+        private string _connectionString;
 
-        private static SqlConnection _connection;
+        private SqlConnection _connection;
 
         public Conexao(string server, string database, string user, string password)
         {
@@ -18,14 +18,29 @@ namespace ReplicacaoSimplificada
                 _connectionString = $"Server={server};Database={database};Trusted_Connection=True;Application Name=ReplicacaoSimplificada";
             else
                 _connectionString = $"Server={server};Database={database};User Id={user};Password={password};Application Name=ReplicacaoSimplificada";
+        }
 
-            _connection = new SqlConnection(_connectionString);
+        private void validaConexao()
+        {
+            if (_connection == null || _connection.State != System.Data.ConnectionState.Open)
+            {
+                try
+                {
+                    _connection?.Close();
+                }
+                catch (Exception)
+                {
+                }
+                _connection = new SqlConnection(_connectionString);
+
+                if (_connection.State != System.Data.ConnectionState.Open)
+                    _connection.Open();
+            }
         }
 
         private DataTable returnDataTable(string query, SqlParameter[] parameters)
         {
-            if (_connection.State != System.Data.ConnectionState.Open)
-                _connection.Open();
+            validaConexao();
 
             var command = _connection.CreateCommand();
 
@@ -42,8 +57,7 @@ namespace ReplicacaoSimplificada
 
         private DataTable returnDataTable(string query)
         {
-            if (_connection.State != System.Data.ConnectionState.Open)
-                _connection.Open();
+            validaConexao();
 
             var command = _connection.CreateCommand();
 
@@ -92,8 +106,9 @@ where {key} in (SELECT * FROM (values ('{string.Join("'),('", pks)}')) as x (col
         internal void AtualizarDadosDestino(string destinationSchema, string destinationTable, string columnPK, bool pkIdentity, DataTable colunasDestino, DataRowCollection rows)
         {
             var tempGuid = Guid.NewGuid().ToString().Replace("-", "");
+            var listTypeString = new List<String>() { "nvarchar", "varchar", "varbinary" };
 
-            var queryMerge = $"Select * into #{tempGuid} from ( values";
+            var queryMerge = $"Select {string.Join(", ", colunasDestino.AsEnumerable().Select(s => "Cast(" + s["COLUMN_NAME"] + " as " + s["DATA_TYPE"] + $"{(listTypeString.Any(x => x == s["DATA_TYPE"].ToString()) ? "(max)" : string.Empty)}) " + s["COLUMN_NAME"]))} into #{tempGuid} from ( values";
 
             foreach (DataRow row in rows)
             {
@@ -103,7 +118,7 @@ where {key} in (SELECT * FROM (values ('{string.Join("'),('", pks)}')) as x (col
                     try
                     {
                         var seNull = Convert.ToBoolean(colunasDestino.Select($"COLUMN_NAME = '{column.ColumnName}'").First()["IS_NULLABLE"]);
-                        var tem = row[column.ColumnName].ToString();
+                        var tem = row[column.ColumnName].ToString().Replace("'", "''");
 
                         if (column.DataType == typeof(decimal) && !string.IsNullOrWhiteSpace(tem))
                             tem = tem.Replace(",", ".");
@@ -123,7 +138,8 @@ where {key} in (SELECT * FROM (values ('{string.Join("'),('", pks)}')) as x (col
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine(ex.Message);
+                        Program.Mensagem = ex.Message;
+                        Console.WriteLine(Program.Mensagem);
                     }
 
                 }
@@ -134,7 +150,7 @@ where {key} in (SELECT * FROM (values ('{string.Join("'),('", pks)}')) as x (col
             queryMerge += $") as x({string.Join(", ", colunasDestino.AsEnumerable().Select(s => s["COLUMN_NAME"]))})";
 
             queryMerge += $@"
-{(pkIdentity ? $"SET IDENTITY_INSERT {destinationSchema}.{destinationTable} ON" : string.Empty)} 
+{(colunasDestino.AsEnumerable().Where(x => x["IsIdentity"].ToString() == "1").Any() ? $"SET IDENTITY_INSERT {destinationSchema}.{destinationTable} ON" : string.Empty)} 
 MERGE {destinationSchema}.{destinationTable} AS TargetTable
     USING #{tempGuid} AS SourceTable
     ON (TargetTable.[{columnPK}] = SourceTable.[{columnPK}])
@@ -147,15 +163,14 @@ MERGE {destinationSchema}.{destinationTable} AS TargetTable
 		)
     WHEN MATCHED                                        
         THEN UPDATE SET
-           {string.Join(", ", colunasDestino.AsEnumerable().Where(x => x["COLUMN_NAME"].ToString() != columnPK).Select(s => "TargetTable." + s["COLUMN_NAME"] + " = " + "SourceTable." + s["COLUMN_NAME"]))}
+           {string.Join(", ", colunasDestino.AsEnumerable().Where(x => x["COLUMN_NAME"].ToString() != columnPK).Where(xx => xx["IsIdentity"].ToString() != "1").Select(s => "TargetTable." + s["COLUMN_NAME"] + " = " + "SourceTable." + s["COLUMN_NAME"]))}
 ;
 
-{(pkIdentity ? $"SET IDENTITY_INSERT {destinationSchema}.{destinationTable} OFF" : string.Empty)} 
+{(colunasDestino.AsEnumerable().Where(x => x["IsIdentity"].ToString() == "1").Any() ? $"SET IDENTITY_INSERT {destinationSchema}.{destinationTable} OFF" : string.Empty)} 
 
 ";
 
-            if (_connection.State != System.Data.ConnectionState.Open)
-                _connection.Open();
+            validaConexao();
 
             var command = _connection.CreateCommand();
 
