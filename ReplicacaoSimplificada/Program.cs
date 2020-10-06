@@ -11,6 +11,8 @@ namespace ReplicacaoSimplificada
         public static bool SeAtualizado = false;
         public static string Mensagem;
 
+        public static void AtualizarStatus(string destination, string message, TimeSpan? timeComplete) => new NotImplementedException();
+
         public static void Main(string[] args)
         {
             SeAtualizado = false;
@@ -20,14 +22,14 @@ namespace ReplicacaoSimplificada
 
             if (showHelp(args))
             {
-                help();
+                helpMessage();
                 return;
             }
 
             if (parametersLine.Count() > 1 && args.Count() > 1)
-                setValueDicParametrs(argumentsDic, parametersLine);
+                argumentsDic = returnDicParametrsCommandLine(parametersLine);
             else
-                setValueDicParametrsArgs(argumentsDic, args);
+                argumentsDic = returnDicParametrsArgs(args);
 
 
             var parameterValid = validationParameter(argumentsDic);
@@ -39,23 +41,31 @@ namespace ReplicacaoSimplificada
             {
                 DataTable colunasOrigem, colunasDestino, DadosOrigemKey, DadosDestinoKey, DadosOrigem;
 
-                using (var con = new Conexao(argumentsDic["sourceserver"], argumentsDic["sourcedatabase"], argumentsDic["sourceuser"], argumentsDic["sourcepassword"]))
-                    colunasOrigem = con.RetornaNomeColunas(argumentsDic["sourceschema"], argumentsDic["sourcetable"]);
+                colunasOrigem = RetornarColunas(argumentsDic["sourceserver"], argumentsDic["sourcedatabase"], argumentsDic["sourceuser"], argumentsDic["sourcepassword"], argumentsDic["sourceschema"], argumentsDic["sourcetable"], true);
 
-                using (var con = new Conexao(argumentsDic["destinationserver"], argumentsDic["destinationdatabase"], argumentsDic["destinationuser"], argumentsDic["destinationpassword"]))
-                    colunasDestino = con.RetornaNomeColunas(argumentsDic["destinationschema"], argumentsDic["destinationtable"]);
+                colunasDestino = RetornarColunas(argumentsDic["destinationserver"], argumentsDic["destinationdatabase"], argumentsDic["destinationuser"], argumentsDic["destinationpassword"], argumentsDic["destinationschema"], argumentsDic["destinationtable"], false);
 
-                if (colunasOrigem.CheckColumnNameType(colunasDestino))
+
+                AtualizarStatus(argumentsDic["destinationserver"], $"Verificando Coluna na tabela de destino", null);
+                var time = new System.Diagnostics.Stopwatch();
+                time.Start();
+                var result = !colunasOrigem.CheckColumnExists(colunasDestino);
+                time.Stop();
+
+                if (result)
                 {
-                    Mensagem = $"Existe colunas na tabela de destino que não existe na de origem\n{string.Join(", ", Util.ColumnsNotFind)}";
-                    Console.WriteLine(Mensagem);
+                    Mensagem = $"Existe colunas na tabela de destino que não existe na de origem\n{string.Join(", ", colunasOrigem.NameColumnNotExists(colunasDestino))}";
+                    AtualizarStatus(argumentsDic["destinationserver"], Mensagem, time.Elapsed);
                     return;
                 }
 
-                if (colunasDestino.CheckColumnNameType(colunasOrigem))
+                time = new System.Diagnostics.Stopwatch();
+                result = !colunasDestino.CheckColumnExists(colunasOrigem);
+                time.Stop();
+                if (result)
                 {
-                    Mensagem = $"Existe colunas na tabela de origem que não existe na de destino\n{string.Join(",", Util.ColumnsNotFind)}";
-                    Console.WriteLine(Mensagem);
+                    Mensagem = $"Existe colunas na tabela de origem que não existe na de destino\n{string.Join(",", colunasDestino.NameColumnNotExists(colunasOrigem))}";
+                    AtualizarStatus(argumentsDic["destinationserver"], Mensagem, time.Elapsed);
                     return;
                 }
 
@@ -63,76 +73,126 @@ namespace ReplicacaoSimplificada
                 var columnPKDestino = colunasDestino.Select("SE_PK = 1").First()["COLUMN_NAME"].ToString();
                 var columnPKIdentity = Convert.ToBoolean(colunasDestino.Select("SE_PK = 1").First()["IsIdentity"]);
 
-                using (var con = new Conexao(argumentsDic["sourceserver"], argumentsDic["sourcedatabase"], argumentsDic["sourceuser"], argumentsDic["sourcepassword"]))
-                    DadosOrigemKey = con.RetornaKeyCheckSum(argumentsDic["sourceschema"], columnPKOrigem, argumentsDic["sourcetable"], colunasOrigem, new List<string>(), argumentsDic["sourcewhere"]);
+                DadosOrigemKey = RetornarKeyChecksum(argumentsDic["sourceserver"], argumentsDic["sourcedatabase"], argumentsDic["sourceuser"], argumentsDic["sourcepassword"], argumentsDic["sourceschema"], argumentsDic["sourcetable"], argumentsDic["sourcewhere"], columnPKOrigem, colunasOrigem, true);
 
-                using (var con = new Conexao(argumentsDic["destinationserver"], argumentsDic["destinationdatabase"], argumentsDic["destinationuser"], argumentsDic["destinationpassword"]))
-                    DadosDestinoKey = con.RetornaKeyCheckSum(argumentsDic["destinationschema"], columnPKDestino, argumentsDic["destinationtable"], colunasDestino,
-                         DadosOrigemKey.AsEnumerable().Select(x => x[columnPKDestino].ToString()).ToList(), string.Empty
-                        );
+                DadosDestinoKey = RetornarKeyChecksum(argumentsDic["destinationserver"], argumentsDic["destinationdatabase"], argumentsDic["destinationuser"], argumentsDic["destinationpassword"], argumentsDic["destinationschema"], argumentsDic["destinationtable"], argumentsDic["destinationwhere"], columnPKDestino, colunasOrigem, true);
 
-                var listaPk = new List<object>();
-
-                foreach (DataRow item in DadosOrigemKey.Rows)
-                {
-                    var item2 = DadosDestinoKey.Select($"{columnPKDestino} = '{item[columnPKDestino]}'");
-
-                    if (item2.Count() == 0)
-                        listaPk.Add(new { PK = $"'{item[columnPKDestino]}'", SeInsert = true });
-                    else if (item[1].ToString() != item2[0][1].ToString())
-                        listaPk.Add(new { PK = $"'{item[columnPKDestino]}'", SeInsert = false });
-                }
-
-                using (var con = new Conexao(argumentsDic["sourceserver"], argumentsDic["sourcedatabase"], argumentsDic["sourceuser"], argumentsDic["sourcepassword"]))
-                    DadosOrigem = con.RetornaDados(argumentsDic["sourceschema"], columnPKOrigem, argumentsDic["sourcetable"], colunasOrigem, listaPk.Select(x => x.GetType().GetProperty("PK").GetValue(x, null).ToString()).ToList());
+                var listaPk = VerificarLinhasParaInsertUpdate(DadosOrigemKey, DadosDestinoKey, columnPKDestino);
 
                 var listaQuery = new List<string>();
 
                 if (listaPk.Count > 0)
                 {
+                    DadosOrigem = RetornarDados(argumentsDic["sourceserver"], argumentsDic["sourcedatabase"], argumentsDic["sourceuser"], argumentsDic["sourcepassword"], argumentsDic["sourceschema"], argumentsDic["sourcetable"], string.Empty, columnPKOrigem, colunasOrigem, listaPk.Select(x => x.GetType().GetProperty("PK").GetValue(x, null).ToString()).ToList());
+
                     if (argumentsDic["destinationexecute"].Trim() != "1")
                     {
                         foreach (DataRow item in DadosOrigem.Rows)
                         {
-                            var item2 = listaPk.First(x => x.GetType().GetProperty("PK").GetValue(x, null).ToString() == "'" + item[columnPKDestino].ToString() + "'");
+                            var item2 = listaPk.First(x => x.GetType().GetProperty("PK").GetValue(x, null).ToString() == item[columnPKDestino].ToString());
                             if (Convert.ToBoolean(item2.GetType().GetProperty("SeInsert").GetValue(item2, null)))
-                                listaQuery.Add(Query.GenerateInsert(colunasOrigem, colunasDestino, item));
+                                listaQuery.Add(Query.GenerateInsert(colunasDestino, item));
                             else //Update
-                                listaQuery.Add(Query.GenerateUpdate(colunasOrigem, colunasDestino, item, columnPKDestino));
+                                listaQuery.Add(Query.GenerateUpdate(colunasDestino, item, columnPKDestino));
                         }
-
 
                         if (File.Exists($"{argumentsDic["destinationtable"]}.sql"))
                             File.Delete($"{argumentsDic["destinationtable"]}.sql");
 
                         using (var sw = File.CreateText($"{argumentsDic["destinationtable"]}.sql"))
                             sw.WriteLine($"{(columnPKIdentity ? $"SET IDENTITY_INSERT { argumentsDic["destinationschema"]}.{ argumentsDic["destinationtable"]} OFF " : string.Empty)} " + string.Join("\n", listaQuery) + $"{(columnPKIdentity ? $"SET IDENTITY_INSERT { argumentsDic["destinationschema"]}.{ argumentsDic["destinationtable"]} ON " : string.Empty)} ");
+
+                        Mensagem = $"Geração de arquivo gerado com sucesso {argumentsDic["destinationtable"]}.sql";
+                        AtualizarStatus(argumentsDic["destinationserver"], Mensagem, null);
+                        SeAtualizado = true;
                     }
                     else
                     {
-                        using (var con = new Conexao(argumentsDic["destinationserver"], argumentsDic["destinationdatabase"], argumentsDic["destinationuser"], argumentsDic["destinationpassword"]))
-                            con.AtualizarDadosDestino(argumentsDic["destinationschema"], argumentsDic["destinationtable"], columnPKDestino, columnPKIdentity, colunasOrigem, DadosOrigem.Rows);
+                        using (var con = new Conexao(new SqlConnectionFactory(argumentsDic["destinationserver"], argumentsDic["destinationdatabase"], argumentsDic["destinationuser"], argumentsDic["destinationpassword"])))
+                            con.AtualizarDadosDestino(argumentsDic["destinationschema"], argumentsDic["destinationtable"], columnPKDestino, columnPKIdentity, colunasOrigem, DadosOrigem);
                         SeAtualizado = true;
                     }
                 }
                 else
                 {
-                    Mensagem = "Não existe dados diveregente";
-                    Console.WriteLine(Mensagem);
                     SeAtualizado = true;
+                    Mensagem = "Não existe dados diveregente";
+                    AtualizarStatus(argumentsDic["destinationserver"], Mensagem, null);
                 }
 
-                Console.WriteLine(SeAtualizado);
             }
             catch (Exception ex)
             {
                 Mensagem = ex.Message;
-                Console.WriteLine(Mensagem);
+                AtualizarStatus(argumentsDic["destinationserver"], Mensagem, null);
             }
         }
 
-        private static void setValueDicParametrs(Dictionary<string, string> argumentsDic, string[] parametersLine)
+        public static List<object> VerificarLinhasParaInsertUpdate(DataTable DadosOrigemKey, DataTable DadosDestinoKey, string columnPKDestino)
         {
+            //AtualizarStatus(server, $"Verificando linhas para realização de insert ou update (separando chaves), Qtd Linhas para verificar {DadosOrigemKey.Rows.Count}", null);
+            var time = new System.Diagnostics.Stopwatch();
+            time.Start();
+            var listaPk = new List<object>();
+
+            foreach (DataRow item in DadosOrigemKey.Rows)
+            {
+                var item2 = DadosDestinoKey.Select($"{columnPKDestino} = '{item[columnPKDestino]}'");
+                var value = item[columnPKDestino];
+
+                if (item2.Count() == 0)
+                    listaPk.Add(new { PK = value, SeInsert = true });
+                else if (item[1].ToString() != item2[0][1].ToString())
+                    listaPk.Add(new { PK = value, SeInsert = false });
+            }
+            time.Stop();
+            //AtualizarStatus(server, $"Separação finalizada, qtd de linhas separadas {listaPk.Count}", time.Elapsed);
+            return listaPk;
+        }
+
+        private static DataTable RetornarColunas(string server, string database, string user, string password, string schema, string table, bool seOrigem)
+        {
+            AtualizarStatus(server, $"Recuperando Colunas de {(seOrigem ? "Origem" : "Destino")}", null);
+            var time = new System.Diagnostics.Stopwatch();
+            time.Start();
+            DataTable colunas;
+            using (var con = new Conexao(new SqlConnectionFactory(server, database, user, password)))
+                colunas = con.RetornaNomeColunas(schema, table);
+            time.Stop();
+            AtualizarStatus(server, $"Recuperação de colunas completado", time.Elapsed);
+            return colunas;
+        }
+
+        private static DataTable RetornarKeyChecksum(string server, string database, string user, string password, string schema, string table, string where, string namePk, DataTable dtColunas, bool seOrigem)
+        {
+            AtualizarStatus(server, $"Recuperando dados de {(seOrigem ? "Origem" : "Destino")}", null);
+            var time = new System.Diagnostics.Stopwatch();
+            time.Start();
+            DataTable Dados;
+            using (var con = new Conexao(new SqlConnectionFactory(server, database, user, password)))
+                Dados = con.RetornaKeyCheckSum(schema, namePk, table, dtColunas, null, where);
+            time.Stop();
+            AtualizarStatus(server, $"Recuperação de dados completado", time.Elapsed);
+            return Dados;
+        }
+
+        private static DataTable RetornarDados(string server, string database, string user, string password, string schema, string table, string where, string namePk, DataTable dtColunas, List<string> pks)
+        {
+            AtualizarStatus(server, $"Recuperando dados para enviar para o destino", null);
+            var time = new System.Diagnostics.Stopwatch();
+            time.Start();
+            DataTable Dados;
+            using (var con = new Conexao(new SqlConnectionFactory(server, database, user, password)))
+                Dados = con.RetornaDados(schema, namePk, table, dtColunas, pks);
+            time.Stop();
+            AtualizarStatus(server, $"Recuperação de dados completado", time.Elapsed);
+            return Dados;
+        }
+
+        public static Dictionary<string, string> returnDicParametrsCommandLine(string[] parametersLine)
+        {
+            var argumentsDic = new Dictionary<string, string>();
+
             foreach (var parameter in parametersLine)
             {
                 if (string.IsNullOrWhiteSpace(parameter) || parameter.IndexOf(" ") < 0)
@@ -141,24 +201,28 @@ namespace ReplicacaoSimplificada
                 var key = parameter.Substring(0, parameter.IndexOf(" "));
                 var value = parameter.Substring(parameter.IndexOf(" ") + 1);
 
-                argumentsDic.Add(key, value);
+                argumentsDic.Add(key.Trim(), value.Trim());
             }
+
+            return argumentsDic;
         }
 
-        private static void setValueDicParametrsArgs(Dictionary<string, string> argumentsDic, string[] parametersLine)
+        public static Dictionary<string, string> returnDicParametrsArgs(string[] parametersLine)
         {
+            var argumentsDic = new Dictionary<string, string>();
+
             for (var i = 0; i < parametersLine.Count(); i += 2)
             {
                 var key = parametersLine[i].Replace("--", string.Empty);
                 var value = parametersLine[i + 1];
 
-                argumentsDic.Add(key, value);
+                argumentsDic.Add(key.Trim(), value.Trim());
             }
 
-
+            return argumentsDic;
         }
 
-        private static bool validationParameter(Dictionary<string, string> argumentsDic)
+        public static bool validationParameter(Dictionary<string, string> argumentsDic)
         {
             var listParameterRequired = new List<string>
             {
@@ -175,33 +239,35 @@ namespace ReplicacaoSimplificada
             return !listParameterRequired.Except(argumentsDic.Keys).Any();
         }
 
-        static bool help()
+        public static string helpMessage()
         {
-            Console.WriteLine("COMANDO HELPER");
-            Console.WriteLine();
-            Console.WriteLine("--sourceserver IP/SeverName de origem para se conectar junto com a porta");
-            Console.WriteLine("--sourceuser Usuario para se conectar ao banco de dados de Origem DEfault Impersonate");
-            Console.WriteLine("--sourcepassword Senha do usuario para se conectar a base de dados de Origem obrigatório se informar o usuario");
-            Console.WriteLine("--sourcedatabase Nome do banco de dados de Origem");
-            Console.WriteLine("--sourceschema Nome do schema Origem default \"dbo\" ");
-            Console.WriteLine("--sourcetable Nome da tabela Origem");
-            Console.WriteLine("--sourcewhere filtro para realizacao da comparacao");
+            var message = $@"
+COMANDO HELPER
 
-            Console.WriteLine("--destinationserver  IP/SeverName de Destino para se conectar junto com a porta");
-            Console.WriteLine("--destinationdatabase Nome do banco de dados de Destino");
-            Console.WriteLine("--destinationschema Nome do schema Origem default \"dbo\" ");
-            Console.WriteLine("--destinationtable Nome da tabela Destino");
-            Console.WriteLine("--destinationuser Usuario para se conectar ao banco de dados de Destino DEfault Impersonate");
-            Console.WriteLine("--destinatiopassword Senha do usuario para se conectar a base de dados de Destino obrigatório se informar o usuario");
+--sourceserver IP/SeverName de origem para se conectar junto com a porta
+--sourceuser Usuario para se conectar ao banco de dados de Origem DEfault Impersonate
+--sourcepassword Senha do usuario para se conectar a base de dados de Origem obrigatório se informar o usuario
+--sourcedatabase Nome do banco de dados de Origem
+--sourceschema Nome do schema Origem default ""dbo""
+--sourcetable Nome da tabela Origem
+--sourcewhere filtro para realizacao da comparacao
 
-            Console.WriteLine("--destinationexecute 1 = true 0 = false");
+--destinationserver  IP/SeverName de Destino para se conectar junto com a porta
+--destinationuser Usuario para se conectar ao banco de dados de Destino DEfault Impersonate
+--destinatiopassword Senha do usuario para se conectar a base de dados de Destino obrigatório se informar o usuario
+--destinationdatabase Nome do banco de dados de Destino
+--destinationschema Nome do schema Origem default ""dbo""
+--destinationtable Nome da tabela Destino
+--destinationwhere filtro para realizacao da comparacao
 
+--destinationexecute 1 = true 0 = false
+";
 
-            return true;
+            return message;
         }
 
-        static bool showHelp(IEnumerable<string> args) => args.Where(s => s != string.Empty).Select(s => s.ToLowerInvariant())
-                .Intersect(new[] { "--help", "-help", "-h", "h", "help" }).Any();
+        public static bool showHelp(IEnumerable<string> args) => args.Where(s => s != string.Empty).Select(s => s.ToLowerInvariant())
+                .Intersect(new[] { "--help", "-help", "--h", "-h", "h", "help" }).Any();
 
     }
 }
