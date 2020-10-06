@@ -6,7 +6,7 @@ using System.Text;
 
 namespace ReplicacaoSimplificada
 {
-    internal static class Query
+    public static class Query
     {
         public static string ReturnTableColumnNameType => $@"
 select 
@@ -38,52 +38,51 @@ where c.table_schema = @schema and c.table_Name = @table
 and data_Type != 'timestamp'
 ";
 
-        public static string GenerateInsert(DataTable colunasOrigem, DataTable colunasDestino, DataRow item)
+        public static string GenerateInsert(DataTable colunasDestino, DataRow item)
         {
             var index = 0;
             var listaItem = new List<string>();
-            foreach(DataColumn column in item.Table.Columns)
+
+            if (!colunasDestino.CheckColumnExists(item))
+                throw new Exception("Não foi possivel localizar o nome da coluna na tabela de destino.");
+
+            foreach (DataColumn column in item.Table.Columns)
             {
-                try
-                {
-                    var seNull = Convert.ToBoolean(colunasDestino.Select($"COLUMN_NAME = '{column.ColumnName}'").First()["IS_NULLABLE"]);
-                    var tem = item.ItemArray[index].ToString();
 
-                    if(column.DataType == typeof(decimal) && !string.IsNullOrWhiteSpace(tem))
-                        tem = tem.Replace(",", ".");
-                    else if(column.DataType == typeof(DateTime) && !string.IsNullOrWhiteSpace(tem))
-                        tem = ((DateTime)item.ItemArray[index]).ToString("yyyyMMdd HH:mm:ss.fff");
-                    else if (column.DataType == typeof(byte[]))
-                        tem = System.Convert.ToBase64String((byte[])item.ItemArray[index]);
+                var seNull = Convert.ToBoolean(colunasDestino.Select($"COLUMN_NAME = '{column.ColumnName}'").First()["IS_NULLABLE"]);
+                var tem = item.ItemArray[index].ToString();
 
-                    index += 1;
-                    if (column.DataType != typeof(byte[]))
-                        listaItem.Add($@"{(seNull && string.IsNullOrWhiteSpace(tem) ? "null" : $"'{tem}'")}");
-                    else
-                        listaItem.Add($@"CAST('{tem}' AS VARBINARY(MAX))");
+                if (column.DataType == typeof(decimal) && !string.IsNullOrWhiteSpace(tem))
+                    tem = tem.Replace(",", ".");
+                else if (column.DataType == typeof(DateTime) && !string.IsNullOrWhiteSpace(tem))
+                    tem = ((DateTime)item.ItemArray[index]).ToString("yyyyMMdd HH:mm:ss.fff");
+                else if (column.DataType == typeof(byte[]) && !string.IsNullOrWhiteSpace(tem))
+                    tem = System.Convert.ToBase64String((byte[])item.ItemArray[index]);
 
-                }
-                catch (Exception ex)
-                {
-                    Program.Mensagem = ex.Message;
-                    Console.WriteLine(Program.Mensagem);
-                }
-              
+                index += 1;
+                if (seNull && string.IsNullOrWhiteSpace(tem))
+                    listaItem.Add("null");
+                else if (column.DataType == typeof(byte[]))
+                    listaItem.Add($"CAST('{tem}' AS VARBINARY(MAX))");
+                else
+                    listaItem.Add($"'{tem}'");
             }
 
-            return $"Insert into {colunasOrigem.Rows[0]["TABLE_SCHEMA"]}.{colunasOrigem.Rows[0]["TABLE_NAME"]} ({string.Join(", ", colunasOrigem.AsEnumerable().Select(s => s["COLUMN_NAME"]))}) values ({string.Join(",", listaItem)})";
-
+            return $"Insert into { colunasDestino.Rows[0]["TABLE_SCHEMA"]}.{ colunasDestino.Rows[0]["TABLE_NAME"]} ({ string.Join(", ", colunasDestino.AsEnumerable().Select(s => s["COLUMN_NAME"]))}) values ({ string.Join(",", listaItem)})";
         }
 
-        public static string GenerateUpdate(DataTable colunasOrigem, DataTable colunasDestino, DataRow item, string columnPK)
+        public static string GenerateUpdate(DataTable colunasDestino, DataRow item, string columnPK)
         {
             var index = 0;
             var listaItem = new List<string>();
 
-            foreach(DataColumn column in item.Table.Columns)
+            if (!colunasDestino.CheckColumnExists(item))
+                throw new Exception("Não foi possivel localizar o nome da coluna na tabela de destino.");
+
+            foreach (DataColumn column in item.Table.Columns)
             {
                 var seNull = Convert.ToBoolean(colunasDestino.Select($"COLUMN_NAME = '{column.ColumnName}'").First()["IS_NULLABLE"]);
-                if(columnPK == column.ColumnName)
+                if (columnPK == column.ColumnName)
                 {
                     index += 1;
                     continue;
@@ -91,16 +90,52 @@ and data_Type != 'timestamp'
 
                 var tem = item.ItemArray[index].ToString();
 
-                if(column.DataType == typeof(decimal))
+                if (column.DataType == typeof(decimal))
                     tem = tem.Replace(",", ".");
-                else if(column.DataType == typeof(DateTime) && !string.IsNullOrWhiteSpace(tem))
+                else if (column.DataType == typeof(DateTime) && !string.IsNullOrWhiteSpace(tem))
                     tem = ((DateTime)item.ItemArray[index]).ToString("yyyyMMdd HH:mm:ss.fff");
+                else if (column.DataType == typeof(byte[]) && !string.IsNullOrWhiteSpace(tem))
+                    tem = System.Convert.ToBase64String((byte[])item.ItemArray[index]);
                 index += 1;
 
-                listaItem.Add($@" {column.ColumnName} = {(seNull && string.IsNullOrWhiteSpace(tem) ? "null" : $"'{tem}'")} ");
+                if (column.DataType != typeof(byte[]))
+                    listaItem.Add($@"{column.ColumnName} = {(seNull && string.IsNullOrWhiteSpace(tem) ? "null" : $"'{tem}'")}");
+                else
+                    listaItem.Add($@"{column.ColumnName} = {(seNull && string.IsNullOrWhiteSpace(tem) ? "null" : $"CAST('{tem}' AS VARBINARY(MAX))")}");
+
             }
 
-            return $"update {colunasOrigem.Rows[0]["TABLE_SCHEMA"]}.{colunasOrigem.Rows[0]["TABLE_NAME"]} set  {string.Join(",", listaItem)} where {columnPK} = '{item[columnPK].ToString()}'";
+            return $"update {colunasDestino.Rows[0]["TABLE_SCHEMA"]}.{colunasDestino.Rows[0]["TABLE_NAME"]} set {string.Join(", ", listaItem)} where {columnPK} = '{item[columnPK].ToString()}'";
+        }
+
+        public static string GenerateMerge(string sourceTable, string destinationSchema, string destinationTable, string columnPK, DataTable colunasDestino)
+        {
+            var listTypeString = new List<String>() { "nvarchar", "varchar", "varbinary" };
+            var typePkIsString = colunasDestino.AsEnumerable().Where(x => x["COLUMN_NAME"].ToString() == columnPK).Any(s => listTypeString.Any(x => x == s["DATA_TYPE"].ToString()));
+            var setIdentityInsertOn = string.Empty;
+            var setIdentityInsertOff = string.Empty;
+            
+            if (!typePkIsString && colunasDestino.AsEnumerable().Any(x => x["IsIdentity"].ToString() == "1"))
+            {
+                setIdentityInsertOn = $"SET IDENTITY_INSERT {destinationSchema}.{destinationTable} ON";
+                setIdentityInsertOff = $"SET IDENTITY_INSERT {destinationSchema}.{destinationTable} OFF";
+            }
+
+            var queryMerge = $@"
+{setIdentityInsertOn}
+MERGE {destinationSchema}.{destinationTable} AS TargetTable
+    USING {sourceTable} AS SourceTable
+    ON (TargetTable.[{columnPK}] {(typePkIsString ? "COLLATE DATABASE_DEFAULT " : "")}= SourceTable.[{columnPK}])
+    WHEN NOT MATCHED BY TARGET
+        THEN INSERT ({string.Join(", ", colunasDestino.AsEnumerable().Select(s => s["COLUMN_NAME"]))})
+            VALUES ({string.Join(", ", colunasDestino.AsEnumerable().Select(s => "SourceTable." + s["COLUMN_NAME"]))})
+    WHEN MATCHED
+        THEN UPDATE SET
+           {string.Join(", ", colunasDestino.AsEnumerable().Where(x => x["COLUMN_NAME"].ToString() != columnPK).Where(xx => xx["IsIdentity"].ToString() != "1").Select(s => "TargetTable." + s["COLUMN_NAME"] + " = " + "SourceTable." + s["COLUMN_NAME"]))}
+;{setIdentityInsertOff}
+";
+
+            return queryMerge;
         }
     }
 }
