@@ -1,8 +1,0 @@
-{
-  "profiles": {
-    "ReplicacaoSimplificada": {
-      "commandName": "Project",
-      "commandLineArgs": "--sourceserver Banco,4133 --sourcedatabase ERP --sourceschema produto --sourcetable NCM_Imposto --destinationserver 192.168.68.100 --destinationuser sa --destinationpassword Ccbl@#GreeN --destinationdatabase PDV --destinationschema produto --destinationtable NCM_Imposto --destinationexecute 0 "
-    }
-  }
-}
